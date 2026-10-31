@@ -14,9 +14,13 @@ import 'package:saf_util/saf_util_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeSafUtil extends SafUtilPlatform {
+  _FakeSafUtil({this.fileCount = 5});
+
+  final int fileCount;
+
   @override
   Future<List<SafDocumentFile>> list(String uri) async =>
-      List.generate(5, (index) {
+      List.generate(fileCount, (index) {
         final name = 'phrase$index.m4a';
         return SafDocumentFile(
           uri: '$uri/$name',
@@ -134,6 +138,78 @@ void main() {
       expect(find.text(secondTitle), findsOneWidget);
     },
   );
+
+  testWidgets('highlights the current item during continuous playback', (
+    tester,
+  ) async {
+    final player = _ControlledAudioPlayer();
+    await _pumpPage(tester, player);
+
+    await tester.tap(find.byTooltip('Play continuously'));
+    await _waitForPlaybackStart(tester, player);
+
+    final firstTitle = _titleForAssetPath(player.startedAssetPaths.first);
+    final firstRow = _rowForTitle(tester, firstTitle);
+    expect(firstRow.selected, isTrue);
+    expect(
+      firstRow.selectedTileColor,
+      Theme.of(
+        tester.element(find.byType(ListTile).first),
+      ).colorScheme.secondaryContainer,
+    );
+    expect(
+      tester
+          .widgetList<ListTile>(find.byType(ListTile))
+          .where((row) => row.selected),
+      hasLength(1),
+    );
+
+    player.completeCurrentItem();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    await _waitForPlaybackStart(tester, player, expectedCount: 2);
+    await tester.pump();
+
+    final secondTitle = _titleForAssetPath(player.startedAssetPaths.last);
+    expect(
+      _rowForTitle(tester, firstTitle).selected,
+      isFalse,
+      reason:
+          'The highlight must move from $firstTitle to $secondTitle '
+          '(${player.startedAssetPaths.last}).',
+    );
+    expect(_rowForTitle(tester, secondTitle).selected, isTrue);
+
+    await tester.tap(find.byTooltip('Stop playback'));
+    await tester.pump();
+    expect(
+      tester
+          .widgetList<ListTile>(find.byType(ListTile))
+          .where((row) => row.selected),
+      isEmpty,
+    );
+  });
+
+  testWidgets('keeps the continuous playback item visible', (tester) async {
+    SafUtilPlatform.instance = _FakeSafUtil(fileCount: 20);
+    final player = _ControlledAudioPlayer();
+    await _pumpPage(tester, player);
+
+    await tester.tap(find.byTooltip('Play continuously'));
+    await _waitForPlaybackStart(tester, player);
+    await _expectCurrentItemVisible(tester, player);
+
+    for (var itemIndex = 1; itemIndex < 12; itemIndex++) {
+      player.completeCurrentItem();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump();
+      await _waitForPlaybackStart(tester, player, expectedCount: itemIndex + 1);
+      await tester.pumpAndSettle();
+      await _expectCurrentItemVisible(tester, player);
+    }
+  });
 
   testWidgets('disables search filter changes during continuous playback', (
     tester,
@@ -454,6 +530,29 @@ bool _rowHasPauseIcon(WidgetTester tester, String title) {
       .descendant(of: row, matching: find.byIcon(Icons.pause))
       .evaluate()
       .isNotEmpty;
+}
+
+ListTile _rowForTitle(WidgetTester tester, String title) => tester.widget(
+  find.ancestor(of: find.text(title), matching: find.byType(ListTile)),
+);
+
+String _titleForAssetPath(String path) => path.split('/').last.split('_').first;
+
+Future<void> _expectCurrentItemVisible(
+  WidgetTester tester,
+  _ControlledAudioPlayer player,
+) async {
+  final title = _titleForAssetPath(player.startedAssetPaths.last);
+  final row = find.ancestor(
+    of: find.text(title),
+    matching: find.byType(ListTile),
+  );
+  expect(row, findsOneWidget);
+
+  final rowRect = tester.getRect(row);
+  final listRect = tester.getRect(find.byType(ListView));
+  expect(rowRect.top, greaterThanOrEqualTo(listRect.top), reason: title);
+  expect(rowRect.bottom, lessThanOrEqualTo(listRect.bottom), reason: title);
 }
 
 class _ControlledAudioPlayer extends AudioPlayer {
