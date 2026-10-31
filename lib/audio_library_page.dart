@@ -41,6 +41,8 @@ class _AudioLibraryPageState extends State<AudioLibraryPage> {
   late final AudioMetadataIndex _metadataIndex;
   final _searchController = TextEditingController();
   final _searchFocusNode = FocusNode();
+  final _audioListScrollController = ScrollController();
+  final Map<String, GlobalKey> _audioItemKeys = {};
   late Future<_AudioLibraryData> _audioLibraryFuture;
   String? _loadedDirectoryUri;
   String _loadedSubdirectoryPath = '/';
@@ -89,6 +91,7 @@ class _AudioLibraryPageState extends State<AudioLibraryPage> {
     widget.settings.removeListener(_onSettingsChanged);
     _searchFocusNode.dispose();
     _searchController.dispose();
+    _audioListScrollController.dispose();
     unawaited(_playerStateSubscription?.cancel());
     unawaited(_player?.dispose());
     if (widget.metadataIndex == null) unawaited(_metadataIndex.close());
@@ -458,6 +461,7 @@ class _AudioLibraryPageState extends State<AudioLibraryPage> {
           _playingUri = entry.uri;
           _isPlaying = false;
         });
+        _ensureContinuousItemVisible(entry.uri, index, entries.length);
         final completion = player.playerStateStream.firstWhere(
           (state) =>
               state.processingState == ProcessingState.completed ||
@@ -497,6 +501,45 @@ class _AudioLibraryPageState extends State<AudioLibraryPage> {
 
   bool _isCurrentContinuousPlayback(int generation) =>
       mounted && _isContinuousPlaying && generation == _playbackGeneration;
+
+  void _ensureContinuousItemVisible(String uri, int index, int itemCount) {
+    final key = _audioItemKeys.putIfAbsent(uri, GlobalKey.new);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_isContinuousPlaying || _playingUri != uri) return;
+      final itemContext = key.currentContext;
+      if (itemContext != null) {
+        unawaited(
+          Scrollable.ensureVisible(
+            itemContext,
+            alignment: 0.5,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeInOut,
+          ),
+        );
+        return;
+      }
+
+      if (!_audioListScrollController.hasClients || itemCount < 2) return;
+      final position = _audioListScrollController.position;
+      _audioListScrollController.jumpTo(
+        position.maxScrollExtent * index / (itemCount - 1),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_isContinuousPlaying || _playingUri != uri) return;
+        final itemContext = key.currentContext;
+        if (itemContext != null) {
+          unawaited(
+            Scrollable.ensureVisible(
+              itemContext,
+              alignment: 0.5,
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeInOut,
+            ),
+          );
+        }
+      });
+    });
+  }
 
   void _recordContinuousPlaybackEnd(String uri) {
     _lastContinuousEndedAssetPath = uri;
@@ -818,6 +861,7 @@ class _AudioLibraryPageState extends State<AudioLibraryPage> {
                                 ),
                                 Expanded(
                                   child: ListView.separated(
+                                    controller: _audioListScrollController,
                                     itemCount: filteredNames.length,
                                     separatorBuilder: (context, index) =>
                                         Divider(
@@ -829,7 +873,23 @@ class _AudioLibraryPageState extends State<AudioLibraryPage> {
                                       final isCurrent =
                                           _playingUri == entry.uri;
                                       final isPlaying = isCurrent && _isPlaying;
+                                      final isContinuousCurrent =
+                                          _isContinuousPlaying && isCurrent;
                                       return ListTile(
+                                        key: _audioItemKeys.putIfAbsent(
+                                          entry.uri,
+                                          GlobalKey.new,
+                                        ),
+                                        selected: isContinuousCurrent,
+                                        selectedColor:
+                                            colors.onSecondaryContainer,
+                                        selectedTileColor:
+                                            colors.secondaryContainer,
+                                        shape: RoundedRectangleBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
                                         contentPadding:
                                             const EdgeInsets.symmetric(
                                               horizontal: 4,
